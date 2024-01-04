@@ -4,6 +4,7 @@ from collections import defaultdict
 from tqdm import tqdm
 import csv
 import logging
+from typing import Generator
 from lexicon import (
     CMUDict,
     Lexicon,
@@ -16,6 +17,9 @@ from utils.utils import (
     remove_sil,
     normalisation_in_semiotic_classes,
     is_sil,
+    is_short,
+    random_reject,
+    exclusively_contains_sil,
 )
 
 
@@ -26,7 +30,12 @@ def load_dictionary() -> dict:
     return lexicon
 
 
-def load_sentences(file_path: Path) -> list:
+def load_files(source_dir: Path) -> list:
+    all_files = source_dir.glob('*of-00100')
+    return all_files
+
+
+def load_sentences(file_path: Path) -> Generator[str, None, None]:
     logging.info(f'Loading sentences')
     sentences = []
 
@@ -39,9 +48,8 @@ def load_sentences(file_path: Path) -> list:
         lines = open_file.readlines()
         for line in tqdm(lines):
             if contains_eos(line):
-                if not skip_sentence(current_sentence):
-                    final_sentence = finalise_sentence(current_sentence)
-                    sentences.append(final_sentence)
+                final_sentence = finalise_sentence(current_sentence)
+                sentences.append(final_sentence)
                 current_sentence = {
                     'original': '',
                     'normalised': '',
@@ -50,12 +58,8 @@ def load_sentences(file_path: Path) -> list:
                 continue
 
             current_sentence = update_current_sentence(line, current_sentence)
-            
+
     return sentences
-
-
-def skip_sentence(current_sentence: dict) -> bool:
-    return not normalisation_in_semiotic_classes(current_sentence['semiotic_classes'])
 
 
 def finalise_sentence(current_sentence: dict) -> dict:
@@ -63,6 +67,8 @@ def finalise_sentence(current_sentence: dict) -> dict:
     for key, value in current_sentence.items():
         if key != 'semiotic_classes':
             final_sentence[key] = value.strip()
+        else:
+            final_sentence[key] = value
 
     return final_sentence
 
@@ -100,10 +106,22 @@ def subselect_sentences(sentences: list, dictionary: Lexicon) -> list:
     logging.info(f'Subselecting sentences')
     final_sentences = []
     for sentence in tqdm(sentences):
+        if skip_sentence(sentence):
+            continue
         if not sproat_sentence_contains_oov(sentence, dictionary):
             final_sentences.append(sentence)
-    
+
     return final_sentences
+
+
+def skip_sentence(sentence: dict) -> bool:
+    if exclusively_contains_sil(sentence):
+        return True
+    if is_short(sentence) and random_reject(0.8):
+        return True
+    if not normalisation_in_semiotic_classes(sentence['semiotic_classes']) and random_reject(0.5):
+        return True
+    return False
 
 
 def sproat_sentence_contains_oov(sentence: dict, dictionary: Lexicon) -> bool:
@@ -139,7 +157,7 @@ def phonemise_sentence(sentence: str, dictionary: Lexicon) -> str:
 def save_to_csv(sentences: list, save_path: Path) -> None:
     with open(save_path, 'w') as open_csv:
         fieldnames = ['original', 'normalised', 'phonemised']
-        writer = csv.DictWriter(open_csv, fieldnames)
+        writer = csv.DictWriter(open_csv, fieldnames, extrasaction='ignore')
 
         writer.writeheader()
         for sentence in sentences:
@@ -152,14 +170,23 @@ def save_to_csv(sentences: list, save_path: Path) -> None:
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", type=Path, help="The file to turn into a CSV", required=True)
+    parser.add_argument("--source_dir", type=Path, help="The directory containing files to turn into a CSV", required=True)
     parser.add_argument("--target", type=Path, help="Where to save the CSV", required=True)
     args = parser.parse_args()
 
     dictionary = load_dictionary()
-    sentences = load_sentences(args.source)
-    sentences = subselect_sentences(sentences, dictionary)
-    sentences = phonemise_sentences(sentences, dictionary)
+    files = load_files(args.source_dir)
+
+    all_sentences = []
+    for file in files:
+        sentences = load_sentences(file)
+        sentences = subselect_sentences(sentences, dictionary)
+        sentences = phonemise_sentences(sentences, dictionary)
+        all_sentences += sentences
+
+        logging.info(f'Saved {len(sentences)} sentences from {file}, {len(all_sentences)} in total')
+        if len(all_sentences) >= 50000:
+            break
 
     save_to_csv(sentences, args.target)
 
