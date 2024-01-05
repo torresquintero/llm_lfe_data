@@ -117,7 +117,7 @@ def subselect_sentences(sentences: list, dictionary: Lexicon) -> list:
 def skip_sentence(sentence: dict) -> bool:
     if exclusively_contains_sil(sentence):
         return True
-    if is_short(sentence) and random_reject(0.8):
+    if is_short(sentence) and random_reject(0.9):
         return True
     if not normalisation_in_semiotic_classes(sentence['semiotic_classes']) and random_reject(0.5):
         return True
@@ -154,12 +154,13 @@ def phonemise_sentence(sentence: str, dictionary: Lexicon) -> str:
     return phonemised_sentence.strip()
 
 
-def save_to_csv(sentences: list, save_path: Path) -> None:
-    with open(save_path, 'w') as open_csv:
+def save_to_csv(sentences: list, save_path: Path, writeheader=False) -> None:
+    with open(save_path, 'a') as open_csv:
         fieldnames = ['original', 'normalised', 'phonemised']
         writer = csv.DictWriter(open_csv, fieldnames, extrasaction='ignore')
 
-        writer.writeheader()
+        if writeheader:
+            writer.writeheader()
         for sentence in sentences:
             writer.writerow(sentence)
 
@@ -178,15 +179,19 @@ if __name__ == '__main__':
     files = load_files(args.source_dir)
 
     all_sentences = []
-    for file in files:
+    for i, file in enumerate(files):
         sentences = load_sentences(file)
         sentences = subselect_sentences(sentences, dictionary)
         sentences = phonemise_sentences(sentences, dictionary)
         all_sentences += sentences
 
+        if i == 0:
+            save_to_csv(sentences, args.target, writeheader=True)
+        else:
+            save_to_csv(sentences, args.target)
+
         logging.info(f'Saved {len(sentences)} sentences from {file}, {len(all_sentences)} in total')
+
         if len(all_sentences) >= 50000:
             break
-
-    save_to_csv(sentences, args.target)
 
